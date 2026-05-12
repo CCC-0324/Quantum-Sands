@@ -1,0 +1,459 @@
+﻿<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<title>Quantum Sands</title>
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+body {
+  background:#1e3a5f;
+  display:flex; flex-direction:column;
+  align-items:center; justify-content:center;
+  height:100vh; overflow:hidden;
+  font-family:'Segoe UI', Arial, sans-serif;
+}
+canvas {
+  display:block;
+  width:100vw; height:100vh;
+  object-fit:contain;
+  image-rendering:pixelated;
+}
+#hud {
+  position:absolute; top:14px; left:50%; transform:translateX(-50%);
+  color:#fff; font-size:13px; background:rgba(0,0,0,0.55);
+  padding:6px 18px; border-radius:20px; white-space:nowrap;
+  user-select:none; pointer-events:none;
+}
+
+#seed-input-box {
+  position:absolute; bottom:20px; left:50%; transform:translateX(-50%);
+  background:rgba(0,0,0,0.7); border-radius:12px;
+  padding:10px 18px; display:flex; gap:10px; align-items:center;
+}
+#seed-input-box input {
+  background:rgba(255,255,255,0.15); border:1px solid rgba(255,255,255,0.4);
+  color:#fff; font-family:monospace; font-size:14px; font-weight:bold;
+  padding:4px 10px; border-radius:8px; width:110px; text-transform:uppercase;
+  letter-spacing:2px; text-align:center;
+}
+#seed-input-box button {
+  background:#3b82f6; color:#fff; border:none; border-radius:8px;
+  font-size:12px; padding:5px 12px; cursor:pointer;
+}
+
+#legend {
+  position:absolute; bottom:20px; 
+  left:160px;
+  background:rgba(10,25,50,0.82);
+  border-radius:10px; padding:10px 14px;
+  border:1px solid rgba(255,255,255,0.10);
+  user-select:none; pointer-events:none;
+}
+#legend .leg-item {
+  display:flex; align-items:center; gap:8px;
+  margin:3px 0; font-size:12px; color:#e8eef5;
+}
+#legend .leg-swatch {
+  width:14px; height:14px; border-radius:2px; flex-shrink:0;
+  border:1px solid rgba(255,255,255,0.25);
+}
+
+#transition-modal {
+  display: none;
+  position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+  background: rgba(10, 25, 50, 0.95);
+  border: 2px solid rgba(255, 255, 255, 0.2);
+  padding: 25px 40px;
+  border-radius: 12px;
+  text-align: center;
+  color: #fff;
+  z-index: 100;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.6);
+}
+#transition-modal p {
+  margin-bottom: 20px; font-size: 16px; font-weight: bold; letter-spacing: 1px;
+}
+.modal-btn-container {
+  display: flex; gap: 15px; justify-content: center;
+}
+.modal-btn {
+  background: #3b82f6; color: #fff; border: none; border-radius: 8px;
+  font-size: 14px; padding: 8px 20px; cursor: pointer; font-weight: bold;
+  transition: background 0.2s;
+}
+.modal-btn:hover { background: #2563eb; }
+.modal-btn.cancel { background: #64748b; }
+.modal-btn.cancel:hover { background: #475569; }
+</style>
+</head>
+<body>
+<div id="hud">🎮 WASD / 方向鍵 移動</div>
+<canvas id="gameCanvas"></canvas>
+
+<div id="legend">
+  <div class="leg-item"><div class="leg-swatch" style="background:#0b2f52"></div>深層海</div>
+  <div class="leg-item"><div class="leg-swatch" style="background:#38bdf8"></div>淺層海</div>
+  <div class="leg-item"><div class="leg-swatch" style="background:#f5dfa0"></div>沙灘</div>
+  <div class="leg-item"><div class="leg-swatch" style="background:#5cd67a"></div>草地</div>
+  <div class="leg-item"><div class="leg-swatch" style="background:#c8cdd4"></div>石地</div>
+</div>
+
+<div id="seed-input-box">
+  <label style="color:#fff; font-size:12px;">輸入種子碼:</label>
+  <input id="seed-input" maxlength="5" placeholder="XXXXX" />
+  <button onclick="applySeed()">套用</button>
+  <button onclick="randomSeed()">隨機</button>
+</div>
+
+<div id="transition-modal">
+  <p>是否穿越至下張地圖？</p>
+  <div class="modal-btn-container">
+    <button id="btn-yes" class="modal-btn">是</button>
+    <button id="btn-no" class="modal-btn cancel">暫時不要</button>
+  </div>
+</div>
+
+<script>
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+canvas.width  = 1280;
+canvas.height = 720;
+
+const playerSprite = new Image();
+playerSprite.src = 'savage.png';
+const SPRITE_COLUMNS = 4, SPRITE_ROWS = 4;
+let SPRITE_FRAME_W = 0, SPRITE_FRAME_H = 0;
+playerSprite.onload = () => {
+  SPRITE_FRAME_W = playerSprite.naturalWidth  / SPRITE_COLUMNS;
+  SPRITE_FRAME_H = playerSprite.naturalHeight / SPRITE_ROWS;
+};
+
+const ROWS = 18, COLS = 20;
+const TW = 56, TH = 28, HW = TW/2, HH = TH/2;
+const ELEV = { '-1':10, '0':10, '1':10, '2':20, '3':30 };
+const BASE_BOTTOM = 1; 
+
+function getThick(type) {
+  return BASE_BOTTOM + (ELEV[String(type)] ?? 0);
+}
+
+const COLOR = {
+  '-1': { top:'#0b2f52', left:'#061c33', right:'#092540' },
+   '0': { top:'#38bdf8', left:'#0369a1', right:'#0284c7' },
+   '1': { top:'#f5dfa0', left:'#b5935a', right:'#d4aa6a' },
+   '2': { top:'#5cd67a', left:'#1a7a35', right:'#22a048' },
+   '3': { top:'#c8cdd4', left:'#5a6070', right:'#8a909a' },
+};
+
+let MAP = [];
+let currentSeed = '';
+
+function seedFromString(str) {
+  let h = 0;
+  for (let i = 0; i < str.length; i++) h = Math.imul(31,h) + str.charCodeAt(i) | 0;
+  return h >>> 0;
+}
+function makePRNG(seed) {
+  let s = seed;
+  return () => {
+    s |= 0; s = s + 0x6D2B79F5 | 0;
+    let t = Math.imul(s ^ s>>>15, 1|s);
+    t = t + Math.imul(t ^ t>>>7, 61|t) ^ t;
+    return ((t ^ t>>>14) >>> 0) / 4294967296;
+  };
+}
+function smoothstep(t) { return t*t*(3-2*t); }
+function lerp(a,b,t)   { return a+(b-a)*t; }
+function buildNoise2D(rng, size) {
+  const g = Array.from({length:size}, ()=>Array.from({length:size}, ()=>rng()*2-1));
+  return (x,y) => {
+    const xi=Math.floor(x)%size, yi=Math.floor(y)%size;
+    const xf=x-Math.floor(x),   yf=y-Math.floor(y);
+    const xi1=(xi+1)%size, yi1=(yi+1)%size;
+    return lerp(
+      lerp(g[yi][xi], g[yi][xi1], smoothstep(xf)),
+      lerp(g[yi1][xi],g[yi1][xi1],smoothstep(xf)),
+      smoothstep(yf));
+  };
+}
+
+function generateMap(seedStr) {
+  const n1=buildNoise2D(makePRNG(seedFromString(seedStr+'A')),16);
+  const n2=buildNoise2D(makePRNG(seedFromString(seedStr+'B')),8);
+  const n3=buildNoise2D(makePRNG(seedFromString(seedStr+'C')),32);
+  return Array.from({length:ROWS},(_,gy)=>
+    Array.from({length:COLS},(_,gx)=>{
+      const grad=(gx-gy)/(COLS+ROWS);
+      const n=n1(gx*.18,gy*.18)*.55 + n2(gx*.35,gy*.35)*.25 + n3(gx*.08,gy*.08)*.20;
+      const h=grad*1.8+n*0.7;
+      return h<-0.65?-1:h<-0.20?0:h<0.20?1:h<0.70?2:3;
+    }));
+}
+
+function applySeedStr(seedStr) {
+  seedStr=seedStr.toUpperCase().replace(/[^A-Z0-9]/g,'').slice(0,5).padEnd(5,'0');
+  currentSeed=seedStr;
+  document.getElementById('seed-input').value=seedStr;
+  MAP=generateMap(seedStr);
+  
+  let sx=Math.floor(COLS*.55), sy=Math.floor(ROWS*.45);
+  outer: for (let r=0;r<Math.max(ROWS,COLS);r++) {
+    for (let dy=-r;dy<=r;dy++) for (let dx=-r;dx<=r;dx++) {
+      if (Math.abs(dx)!==r&&Math.abs(dy)!==r) continue;
+      const nx=sx+dx,ny=sy+dy;
+      if (nx>=0&&ny>=0&&nx<COLS&&ny<ROWS&&(MAP[ny][nx]===1||MAP[ny][nx]===2)) {
+        sx=nx; sy=ny; break outer;
+      }
+    }
+  }
+  player.gx=sx; player.gy=sy; player.tx=sx; player.ty=sy;
+}
+
+function randomSeed() { applySeedStr(Array.from({length:5},()=>'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'[Math.floor(Math.random()*36)]).join('')); }
+function applySeed()  { applySeedStr(document.getElementById('seed-input').value); }
+
+function generateBiasedSeed(targetTerrain) {
+  let bestSeed = '';
+  let maxCount = -1;
+  for(let i = 0; i < 30; i++) {
+    let testSeed = Array.from({length:5},()=>'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'[Math.floor(Math.random()*36)]).join('');
+    let testMap = generateMap(testSeed);
+    let count = 0;
+    for(let r = 0; r < ROWS; r++) {
+      for(let c = 0; c < COLS; c++) {
+        if(testMap[r][c] === targetTerrain) count++;
+      }
+    }
+    if(count > maxCount) { maxCount = count; bestSeed = testSeed; }
+  }
+  applySeedStr(bestSeed);
+}
+
+function tileAt(gx,gy) {
+  if (gx<0||gy<0||gx>=COLS||gy>=ROWS) return -2;
+  return MAP[gy]?MAP[gy][gx]:-2;
+}
+function isWalkable(gx,gy) { return tileAt(gx,gy)>=-1; }
+
+function mapOrigin() {
+  return { 
+    ox: canvas.width / 2.1,
+    oy: Math.floor((canvas.height - (COLS + ROWS) * HH) / 2) + 45 
+  };
+}
+
+function toScreen(fx,fy,type) {
+  const ez=ELEV[String(type)]??0;
+  const {ox,oy}=mapOrigin();
+  return { x:ox+(fx-fy)*HW, y:oy+(fx+fy)*HH-ez };
+}
+
+let wavePhase=0;
+function drawTile(gx,gy) {
+  const type=tileAt(gx,gy);
+  if (type===-2) return;
+  const c=COLOR[String(type)];
+  const p=toScreen(gx,gy,type);
+  const thick = getThick(type);
+
+  ctx.beginPath();
+  ctx.moveTo(p.x, p.y-HH); ctx.lineTo(p.x+HW, p.y); ctx.lineTo(p.x, p.y+HH); ctx.lineTo(p.x-HW, p.y);
+  ctx.closePath();
+  if (type===-1) {
+    const sh=Math.sin(wavePhase+gx*.7+gy*.5)*10;
+    const b=11+Math.floor(sh);
+    ctx.fillStyle=`rgb(${b+2},${b*2+8},${b*4+60})`;
+  } else if (type===0) {
+    const sh=Math.sin(wavePhase*1.2+gx*.9-gy*.6)*12;
+    const b=Math.floor(195+sh);
+    ctx.fillStyle=`rgb(28,${b-45},${b})`;
+  } else {
+    ctx.fillStyle=c.top;
+  }
+  ctx.fill();
+
+if (type === 2) {
+  const mapSeedNum = seedFromString(currentSeed);
+  let h = (gx * 374761393 + gy * 668265263 + mapSeedNum) | 0;
+  h = Math.imul(h ^ (h >>> 13), 12741261);
+  h = h ^ (h >>> 16);
+  const clusterHash = Math.abs(h);
+  
+  if ((clusterHash % 100) < 40) {
+    ctx.strokeStyle = '#4e9c61'; 
+    ctx.lineWidth = 1.5;
+    ctx.lineCap = 'round';
+    const wind = Math.sin(wavePhase + gx * 0.5 + gy * 0.3) * 1;
+    const count = 3 + (clusterHash % 3);
+    
+    for (let i = 0; i < count; i++) {
+      const subSeed = (clusterHash >> i) + i;
+      const rx = (subSeed % 26) - 13;
+      const ry = ((subSeed * 7) % 14) - 7;
+      
+      const px = p.x + rx;
+      const py = p.y + ry;
+      ctx.beginPath();
+      ctx.moveTo(px - 2, py);
+      ctx.lineTo(px - 4 + wind, py - (3 + (subSeed % 3))); 
+      ctx.moveTo(px, py);
+      ctx.lineTo(px + wind, py - (5 + (subSeed % 6)));
+      ctx.moveTo(px + 2, py);
+      ctx.lineTo(px + 4 + wind, py - (3 + (subSeed % 4)));      
+      ctx.stroke();
+    }
+  }
+}
+
+  ctx.beginPath();
+  ctx.moveTo(p.x-HW, p.y); ctx.lineTo(p.x, p.y+HH); ctx.lineTo(p.x, p.y+HH+thick); ctx.lineTo(p.x-HW, p.y+thick);
+  ctx.closePath(); ctx.fillStyle=c.left; ctx.fill();
+
+  ctx.beginPath();
+  ctx.moveTo(p.x+HW, p.y); ctx.lineTo(p.x, p.y+HH); ctx.lineTo(p.x, p.y+HH+thick); ctx.lineTo(p.x+HW, p.y+thick);
+  ctx.closePath(); ctx.fillStyle=c.right; ctx.fill();
+
+  ctx.strokeStyle='rgba(0,0,0,0.10)'; ctx.lineWidth=0.6;
+  ctx.beginPath();
+  ctx.moveTo(p.x,p.y-HH); ctx.lineTo(p.x+HW,p.y); ctx.lineTo(p.x,p.y+HH); ctx.lineTo(p.x-HW,p.y);
+  ctx.closePath(); ctx.stroke();
+}
+
+function drawPlayer(gx,gy,frame) {
+  const rGx=Math.round(gx), rGy=Math.round(gy);
+  const type=tileAt(rGx,rGy);
+  const p=toScreen(gx,gy,type);
+  const isMoving=Math.abs(player.tx-player.gx)>0.01||Math.abs(player.ty-player.gy)>0.01;
+  const bob=isMoving?Math.sin(frame*.18)*2.5:0;
+
+  ctx.save(); ctx.globalAlpha=0.22; ctx.fillStyle='#000';
+  ctx.beginPath(); ctx.ellipse(p.x,p.y,14,5,0,0,Math.PI*2); ctx.fill();
+  ctx.restore();
+
+  if (!playerSprite.complete || SPRITE_FRAME_W===0) {
+    ctx.fillStyle='#fda4af'; ctx.fillRect(p.x-10,p.y-bob-40,20,40);
+    return;
+  }
+
+  const fi=isMoving?Math.floor(frame/6)%SPRITE_COLUMNS:0;
+  const dh=80, dw=(SPRITE_FRAME_W/SPRITE_FRAME_H)*dh;
+  const drawX=p.x-dw/2, drawY=p.y-bob-dh+10;
+
+  if (type === 0 || type === -1) {
+    const submergeDepth = (type === -1) ? 40 : 10;
+    const waterSurfaceY = p.y - 0.2 + (type === -1 ? -5 : 0);
+    ctx.save();
+    ctx.beginPath(); ctx.rect(0, 0, canvas.width, waterSurfaceY); ctx.clip();
+    ctx.imageSmoothingEnabled=false;
+    ctx.drawImage(playerSprite, fi*SPRITE_FRAME_W, player.dir*SPRITE_FRAME_H, SPRITE_FRAME_W, SPRITE_FRAME_H, drawX, drawY+submergeDepth, dw, dh);
+    ctx.restore();
+  } else {
+    ctx.save(); ctx.imageSmoothingEnabled=false;
+    ctx.drawImage(playerSprite, fi*SPRITE_FRAME_W, player.dir*SPRITE_FRAME_H, SPRITE_FRAME_W, SPRITE_FRAME_H, drawX, drawY, dw, dh);
+    ctx.restore();
+  }
+
+if (type === -1) {
+  const bubbleCount = 3;
+  for (let i = 0; i < bubbleCount; i++) {
+    const speed = 0.05;
+    const shiftX = Math.sin(player.frame * speed + i * 2) * 10; 
+    const shiftY = -((player.frame + i * 20) % 160);
+    const bx = p.x + shiftX + (i * 8 - 8); 
+    const by = p.y - 30 + shiftY;
+    const opacity = 1 - (Math.abs(shiftY) / 60);
+
+    if (opacity > 0) {
+      ctx.save();
+      ctx.beginPath();
+      ctx.arc(bx, by, 2 + i, 0, Math.PI * 2);
+      ctx.fillStyle = `rgba(255, 255, 255, ${opacity * 0.5})`;
+      ctx.fill();
+      ctx.strokeStyle = `rgba(255, 255, 255, ${opacity * 0.8})`;
+      ctx.lineWidth = 0.5;
+      ctx.stroke();
+      ctx.restore();
+    }
+  }
+}
+}
+
+const player={gx:12,gy:8,tx:12,ty:8,frame:0,dir:1};
+const held=new Set();
+window.addEventListener('keydown',e=>{ held.add(e.key); if(['ArrowUp','ArrowDown','ArrowLeft','ArrowRight',' '].includes(e.key)) e.preventDefault(); });
+window.addEventListener('keyup',e=>held.delete(e.key));
+
+let prompting = false;
+let boundaryCooldown = 0;
+
+function triggerTransitionPrompt(cx, cy) {
+  prompting = true;
+  held.clear(); 
+  const currentTerrain = MAP[cy][cx];
+  const modal = document.getElementById('transition-modal');
+  modal.style.display = 'block';
+  
+  document.getElementById('btn-yes').onclick = () => {
+    modal.style.display = 'none';
+    prompting = false;
+    generateBiasedSeed(currentTerrain);
+  };
+  
+  document.getElementById('btn-no').onclick = () => {
+    modal.style.display = 'none';
+    prompting = false;
+    boundaryCooldown = 60; 
+  };
+}
+
+function update() {
+  player.gx+=(player.tx-player.gx)*0.28;
+  player.gy+=(player.ty-player.gy)*0.28;
+  if (Math.abs(player.tx-player.gx)<0.02&&Math.abs(player.ty-player.gy)<0.02) { player.gx=player.tx; player.gy=player.ty; }
+  
+  if (boundaryCooldown > 0) boundaryCooldown--;
+
+  if (!prompting && !(Math.abs(player.tx-player.gx)>0.15||Math.abs(player.ty-player.gy)>0.15)) {
+    let dx=0,dy=0;
+    if (held.has('ArrowUp')||held.has('w')||held.has('W')) {dx=-1;dy=0;player.dir=3;}
+    else if (held.has('ArrowDown')||held.has('s')||held.has('S')) {dx=1;dy=0;player.dir=1;}
+    else if (held.has('ArrowLeft')||held.has('a')||held.has('A')) {dx=0;dy=1;player.dir=2;}
+    else if (held.has('ArrowRight')||held.has('d')||held.has('D')) {dx=0;dy=-1;player.dir=0;}
+    
+    if (dx!==0||dy!==0) {
+      let nx = player.tx + dx, ny = player.ty + dy;
+      if (nx < 0 || ny < 0 || nx >= COLS || ny >= ROWS) {
+        if (boundaryCooldown <= 0) triggerTransitionPrompt(player.tx, player.ty);
+      } 
+      else if (isWalkable(nx, ny)) { player.tx=nx; player.ty=ny; }
+    }
+  }
+  player.frame++; wavePhase+=0.04;
+}
+
+function render() {
+  const sg=ctx.createLinearGradient(0,0,0,canvas.height*.6);
+  sg.addColorStop(0,'#0f2744'); sg.addColorStop(1,'#2e6080');
+  ctx.fillStyle=sg; ctx.fillRect(0,0,canvas.width,canvas.height);
+  
+  let playerDrawn = false;
+  for (let s=0;s<ROWS+COLS-1;s++) {
+    for (let gx=0;gx<COLS;gx++) {
+      const gy=s-gx;
+      if (gy>=0&&gy<ROWS) {
+        drawTile(gx,gy);
+        if (Math.round(player.gx) === gx && Math.round(player.gy) === gy) {
+          drawPlayer(player.gx, player.gy, player.frame);
+          playerDrawn = true;
+        }
+      }
+    }
+  }
+  if (!playerDrawn) drawPlayer(player.gx, player.gy, player.frame);
+}
+
+randomSeed();
+(function loop(){ update(); render(); requestAnimationFrame(loop); })();
+</script>
+</body>
+</html>
