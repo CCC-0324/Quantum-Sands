@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<title>地面肉物件繪製預覽</title>
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+body {
+  background: #1e3a5f;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  font-family: 'Segoe UI', Arial, sans-serif;
+  color: #e8eef5;
+}
+h1 { font-size: 15px; margin-bottom: 12px; opacity: 0.7; letter-spacing: 1px; }
+canvas {
+  display: block;
+  image-rendering: pixelated;
+  border-radius: 12px;
+  border: 1px solid rgba(255,255,255,0.12);
+}
+.label {
+  margin-top: 12px;
+  font-size: 12px;
+  opacity: 0.5;
+}
+</style>
+</head>
+<body>
+<h1>地面肉物件 · drawMeatObject 預覽</h1>
+<canvas id="c" width="540" height="260"></canvas>
+<div class="label">左：地面肉（螃蟹／海鷗掉落）　右：水面肉（漁網收起，載浮載沉）</div>
+
+<script>
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+
+// ── 等角地磚常數（與主遊戲一致）──────────────────────────
+const TW = 56, TH = 28, HW = TW / 2, HH = TH / 2;
+const ELEV = { '-1': 10, '0': 10, '1': 10, '2': 20, '3': 30 };
+
+// 格子類型：1 = 沙灘（地面肉用），0 = 淺水（水面肉用）
+const COLOR = {
+  '-1': { top: '#0b2f52', left: '#061c33', right: '#092540' },
+   '0': { top: '#38bdf8', left: '#0369a1', right: '#0284c7' },
+   '1': { top: '#f5dfa0', left: '#b5935a', right: '#d4aa6a' },
+};
+
+// ── 工具函數 ────────────────────────────────────────────
+function toScreen(fx, fy, type, ox, oy) {
+  return {
+    x: ox + (fx - fy) * HW,
+    y: oy + (fx + fy) * HH - (ELEV[String(type)] ?? 0)
+  };
+}
+
+// 繪製單一等角地磚（上面 + 左側面 + 右側面）
+function drawTile(gx, gy, type, ox, oy) {
+  const p = toScreen(gx, gy, type, ox, oy);
+  const col = COLOR[String(type)];
+  const thick = 1 + (ELEV[String(type)] ?? 10);
+
+  // 上面
+  ctx.beginPath();
+  ctx.moveTo(p.x,      p.y - HH);
+  ctx.lineTo(p.x + HW, p.y);
+  ctx.lineTo(p.x,      p.y + HH);
+  ctx.lineTo(p.x - HW, p.y);
+  ctx.closePath();
+  ctx.fillStyle = col.top;
+  ctx.fill();
+
+  // 左側面
+  ctx.beginPath();
+  ctx.moveTo(p.x - HW, p.y);
+  ctx.lineTo(p.x,      p.y + HH);
+  ctx.lineTo(p.x,      p.y + HH + thick);
+  ctx.lineTo(p.x - HW, p.y + thick);
+  ctx.closePath();
+  ctx.fillStyle = col.left;
+  ctx.fill();
+
+  // 右側面
+  ctx.beginPath();
+  ctx.moveTo(p.x,      p.y + HH);
+  ctx.lineTo(p.x + HW, p.y);
+  ctx.lineTo(p.x + HW, p.y + thick);
+  ctx.lineTo(p.x,      p.y + HH + thick);
+  ctx.closePath();
+  ctx.fillStyle = col.right;
+  ctx.fill();
+}
+
+// ── 地面肉繪製（與主遊戲 drawMeatObject 邏輯相同）──────
+function drawLandMeat(cx, cy) {
+  ctx.save();
+  ctx.translate(cx, cy - 5);
+  ctx.scale(0.5, 0.5);
+
+  // 陰影
+  ctx.globalAlpha = 0.22;
+  ctx.fillStyle = '#000';
+  ctx.beginPath();
+  ctx.ellipse(0, 8, 10, 3.5, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.globalAlpha = 1;
+
+  // 骨柄
+  ctx.rotate(-0.5);
+  ctx.fillStyle = '#e8d5b0';
+  ctx.beginPath();
+  ctx.roundRect(-2.5, 0, 5, 9, 2);
+  ctx.fill();
+  ctx.strokeStyle = '#b8a070';
+  ctx.lineWidth = 0.7;
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.arc(2, 9, 3, 0, Math.PI * 2);
+  ctx.fillStyle = '#e8d5b0';
+  ctx.fill();
+  ctx.strokeStyle = '#b8a070';
+  ctx.lineWidth = 0.7;
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.arc(-3, 8, 2.5, 0, Math.PI * 2);
+  ctx.fillStyle = '#e8d5b0';
+  ctx.fill();
+  ctx.stroke();
+
+  // 肉塊
+  ctx.fillStyle = '#c8622a';
+  ctx.beginPath();
+  ctx.ellipse(0, -7, 9, 8, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.strokeStyle = '#8a3a10';
+  ctx.lineWidth = 0.9;
+  ctx.stroke();
+
+  // 高光
+  ctx.globalAlpha = 0.4;
+  ctx.fillStyle = 'rgba(255,200,150,0.9)';
+  ctx.beginPath();
+  ctx.ellipse(-2.5, -5, 3.5, 3.5, -0.4, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.restore();
+}
+
+// ── 水面肉繪製（inWater: true 分支）──────────────────────
+function drawWaterMeat(cx, cy, bobOffset) {
+  const rmx = 5, rmy = 4.5;
+  const my = cy + bobOffset;
+
+  ctx.save();
+  ctx.translate(cx, my);
+
+  // 骨頭（右斜上伸出，在肉塊後方先畫）
+  ctx.save();
+  ctx.translate(3, -5);
+  ctx.rotate(-0.9);
+  ctx.globalAlpha = 1;
+
+  const bc = '#e8d5b0', bs = '#b8a070';
+  ctx.fillStyle = bc; ctx.strokeStyle = bs; ctx.lineWidth = 0.5;
+  ctx.beginPath(); ctx.roundRect(-1, -4, 2, 8, 1); ctx.fill(); ctx.stroke();
+  ctx.beginPath(); ctx.arc(0, -5, 1.8, 0, Math.PI * 2);
+  ctx.fillStyle = bc; ctx.fill(); ctx.strokeStyle = bs; ctx.lineWidth = 0.5; ctx.stroke();
+  ctx.beginPath(); ctx.arc(2.2, -3.2, 1.4, 0, Math.PI * 2);
+  ctx.fillStyle = bc; ctx.fill(); ctx.stroke();
+  ctx.beginPath(); ctx.arc(0, 4.5, 1.8, 0, Math.PI * 2);
+  ctx.fillStyle = bc; ctx.fill(); ctx.strokeStyle = bs; ctx.lineWidth = 0.5; ctx.stroke();
+  ctx.beginPath(); ctx.arc(-2.2, 3.0, 1.4, 0, Math.PI * 2);
+  ctx.fillStyle = bc; ctx.fill(); ctx.stroke();
+  ctx.restore();
+
+  // 肉塊：水面下（半沉、偏暗）
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(-rmx - 3, 0, (rmx + 3) * 2, rmy + 8);
+  ctx.clip();
+  ctx.globalAlpha = 0.42;
+  ctx.fillStyle = '#8c4a26';
+  ctx.beginPath();
+  ctx.ellipse(0, 0, rmx, rmy, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+
+  // 肉塊：水面上（露出部分）
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(-rmx - 3, -rmy - 8, (rmx + 3) * 2, rmy + 8);
+  ctx.clip();
+  ctx.fillStyle = '#c8622a';
+  ctx.beginPath();
+  ctx.ellipse(0, 0, rmx, rmy, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.strokeStyle = '#8a3a10';
+  ctx.lineWidth = 0.9;
+  ctx.stroke();
+  ctx.globalAlpha = 0.4;
+  ctx.fillStyle = 'rgba(255,200,150,0.9)';
+  ctx.beginPath();
+  ctx.ellipse(-1.5, -1.5, 2.0, 2.0, -0.4, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+
+  // 水線高光環
+  ctx.globalAlpha = 0.5;
+  ctx.strokeStyle = 'rgba(160,215,255,0.8)';
+  ctx.lineWidth = 1.1;
+  ctx.beginPath();
+  ctx.ellipse(0, 0, rmx + 1.5, 2.0, 0, 0, Math.PI * 2);
+  ctx.stroke();
+
+  ctx.restore();
+}
+
+// ── 背景漸層 ──────────────────────────────────────────────
+const bgGrad = ctx.createLinearGradient(0, 0, 0, canvas.height * 0.6);
+bgGrad.addColorStop(0, 'rgb(15,39,68)');
+bgGrad.addColorStop(1, 'rgb(46,96,128)');
+
+// ── 場景配置 ──────────────────────────────────────────────
+// 左半：3x3 沙灘，肉放中央
+const OX_LAND  = 145;
+const OY_LAND  = 120;
+const LAND_TILES = [
+  [0,0,1],[1,0,1],[2,0,1],
+  [0,1,1],[1,1,1],[2,1,1],
+  [0,2,1],[1,2,1],[2,2,1],
+];
+
+// 右半：3x3 淺水，肉放中央
+const OX_WATER = 370;
+const OY_WATER = 120;
+const WATER_TILES = [
+  [0,0,0],[1,0,0],[2,0,0],
+  [0,1,0],[1,1,0],[2,1,0],
+  [0,2,0],[1,2,0],[2,2,0],
+];
+
+function render() {
+  const now = performance.now();
+
+  ctx.fillStyle = bgGrad;
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  // ── 左側：沙灘磚 ──
+  for (const [gx, gy, t] of LAND_TILES) drawTile(gx, gy, t, OX_LAND, OY_LAND);
+
+  // 地面肉：放在 (1,1) 中央磚的螢幕位置
+  const pLand = toScreen(1, 1, 1, OX_LAND, OY_LAND);
+  drawLandMeat(pLand.x, pLand.y);
+
+  // ── 右側：水面磚 ──
+  for (const [gx, gy, t] of WATER_TILES) drawTile(gx, gy, t, OX_WATER, OY_WATER);
+
+  // 水面肉：載浮載沉，bob 隨時間變化
+  const pWater = toScreen(1, 1, 0, OX_WATER, OY_WATER);
+  const bob = Math.sin(now * 0.003) * 2.2;
+  drawWaterMeat(pWater.x, pWater.y, bob);
+
+  requestAnimationFrame(render);
+}
+
+render();
+</script>
+</body>
+</html>
